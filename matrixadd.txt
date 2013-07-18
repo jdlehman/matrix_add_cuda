@@ -1,0 +1,58 @@
+Jonathan Lehman
+
+I decided to set up the matrix add problem such that each thread on the GPU represents an index in the matrix being added, such that ideally, there are exactly the same number of threads as matrix elements, meaning each thread does one addition operation.  Initially I was going to set up 3 two-dimensional arrays so that I could reference the indexes like a[x][y] etc, but then I realized if I did this, I was assuming that the way the number of blocks per grid, and number of threads per block would mirror the matrix being added.  For example, if  two 10x20 matrix were being added, then the GPU would be set up such that there would be 10x20 threads (including all the blocks).  This would not work very well for a lot of cases, because if the user specified values for the block width/height or grid width/height that do not work with the matrix size, then it may be impossible to reference some of the elements in the array, like if there is only a total width of 4 threads but the matrix has a width of 1000.  How would elements in columns past 4 be referenced?
+
+After realizing this error, I decided to treat the matrices as one dimensional arrays.  This allows greater flexibility in the GPU representation, because if the dimensions of threads on the GPU do not match the dimensions of the matrices being added, it will not matter because the elements are being referenced by their unique index/element number in the array, not a pair of indices.  Therefore even if the total width of threads is 4 and the matrix has a width of 1000, the next element (5th element and so on) in the first row will just referred to by an element in the next row, because the 5th element is still the 5th element in a one dimensional array even if it is being processed by a thread in a different row.  
+
+Essentially, the layout of the threads in the grid no longer has to correspond to the layout of the array, as long as each element is still being processed.  This method works until the number of elements in the matrices being added exceeds the number of threads being used on the GPU.  To fix this problem, I essentially assigned each thread an element index in the array to add, and once each thread had been assigned an element to add, I began reassigning each thread, starting with the first thread in the grid, another element index to add (and I would go through this process again once each thread is adding two elements and so on).  THis was actually easy to account for, I just divided the number of elements in the array by the number of threads being used on the GPU and rounded up to the nearest whole number, this would be the number of iterations I would need to assign threads another element to add.  
+
+So I added a for loop to the add function, and checked to make sure that the index of the elements being added was within that of the matrix.  I passed the two arrays being added, and the resultant array as parameters to the add function, as well as the size (number of elements), and the reps (the number of times rounded up to the nearest integer that the for loop would need to iterate to ensure all the elements are being added even if there are more elements in the matrix than threads in the grid).
+
+Then I added input checks, the checkArgs function, which takes the user input and ensures that there are the correct number of arguments, that each argument is an integer greater than 0 and that the value is no bigger than the max integer value allowed.
+
+After checking the inputs I convert them to integers and then check that the GPU can handle the block and grid dimensions being specified, and that the GPU has enough global memory to handle all of the float elements.
+
+Obviously I kept the same random number generation to fill the matrices, as used in the merge sort, but I seeded the random number generator to a different integer for both input arrays, a and b.  This allows for the resultant matrix to be checked with a matrix add on the cpu because the same values will be generated both times, but because of the alternate seedings, a and b won't be identical to each other, though they a will be identical for all a of the same size as will b for all b of the identical size.
+
+The next step was to add code to record the timings.  I decided to cut out the times of copying data back and forth between the GPU and CPU and just record the timings of the calculations.  So i began the timer after the values were copied to the global device memory and stopped the timer after the threads synchronized, but before the resulting data was copied from the device to the host.
+
+
+Lastly, getting the timings is needed to develop a conclusion.  I will test large matrix sizes to get substantial timings, but I believe there are 3 primary tests as far as size goes.  A test for when there are more threads in the grid then matrix elements, when these values are equal, and when there are more matrix elements than threads.
+
+
+For all of the below timings, each time is an average of 3 tests with the same input and each timing was run on gpu1 with no other users on the machine
+
+tests for when number of elements < number of threads
+gridW 		gridH 		blockW 		blockH 		matrixH 	matrixW 	num elements	avgtime
+100		50000		20		25		400		1000		400000		0.000636
+700		600		150		3		24000		4500		108000000	0.000639
+800		1000		16		32		32000		10880		348160000	0.000621
+1000		5000		21		23		21000		16560		347760000 	0.000638	
+
+
+tests for when number of elements == number of threads
+gridW 		gridH 		blockW 		blockH 		matrixH 	matrixW 	num elements	avgtime
+40		20		20		25		400		1000		400000		0.008895
+400		600		150		3		24000		4500		108000000	0.000651
+680		1000		16		32		32000		10880		348160000	0.000711
+1000		680		16		32		32000		10880		348160000	0.000721
+900		800		21		23		21000		16560		347760000 	0.000743
+
+tests for when number of elements > number of threads
+gridW 		gridH 		blockW 		blockH 		matrixH 	matrixW 	num elements	avgtime
+1		1		1		1		400		1000		400000		0.294919
+40		600		150		3		24000		4500		108000000	0.000829
+10		40		16		32		32000		10880		348160000	0.023579
+100		480		16		32		32000		10880		348160000	0.000782
+300		200		12		10		21000		16560		347760000 	0.001215
+
+Based on these timings, it is evident that when there is at least one thread per element in the matrix or more, the timings will be faster than when there are less threads then the number of elements, because then each thread must do more work.  There are so many possible combinations of data to test, one would have to create an automated test that goes through nearly every possible combination based on the GPU's capabilities (memory, number of threads etc) to get completely accurate data, which would probably take a long time to run so many tests, but this would be the only way to gather enough data to get a full results to back up any conclusion.  Most likely certain optimizations would work better based on the GPU architecture, such as taking advantage of 32 thread warp size etc for the most efficient solution for a particular set of data.  
+
+In general though, the ideal solution would be one thread per element being added, because more than that would have additional overhead and threads that are doing nothing, and less than that would require each thread to do more work which would significantly increase the time.  
+
+It should be noted that the timings do not include data transfer between the GPU and CPU, which comprises the majority of the time it takes to run the program (observable seconds versus the recorded milliseconds of calculations on the GPU).
+
+Also, it is clear doing everything completely linearly, is the slowest (when the grid and block sizes are 1), which is the first test of the third set of tests.  This is evident even though the number of elements being operated on is relatively small.
+
+The reason the first test of the second set of tests has a much higher time than the other tests in the set, probably has something to do with the architecture.  The numbers that were selected probably are not optimal to the way the GPU functions, such as warp size of threads and other factors that may increase the time if not selected properly.
+
